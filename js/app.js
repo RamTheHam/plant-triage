@@ -149,7 +149,7 @@ function diagnose(symptomIds) {
   // Mixed signals: symptoms point at both wet and dry problems.
   const hasDry = set.has("wilting") || set.has("brown_tips");
   const hasWet = set.has("drooping") || set.has("yellowing");
-  const mixed = hasDry && hasWet && top.id !== "underwatering" && top.id !== "root_rot";
+  const mixed = hasDry && hasWet;
 
   const closeRace = runner && (top.score - runner.score) <= 0.25 * Math.max(top.score, 0.001);
 
@@ -167,7 +167,7 @@ function buildPlan(issueId) {
     return {
       day: step.day,
       title: step.title,
-      text: step.day === 1 ? ISSUES[issueId].first_aid + " " + text : text,
+      text,
       goal: step.day === 14,
     };
   });
@@ -179,6 +179,9 @@ function buildPlan(issueId) {
 const state = {
   screen: "home",
   photoDataUrl: null,
+  afterPhotoDataUrl: null,
+  saved: false,
+  manualDiagnosis: false,
   demo: false,
   plantName: "your plant",
   symptoms: [],
@@ -199,7 +202,10 @@ function showScreen(name) {
     d.classList.toggle("on", s === STEP_OF[name]);
     d.classList.toggle("done", s < STEP_OF[name]);
   });
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  const heading = $(`screen-${name}`).querySelector("h1, h2");
+  if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+  window.scrollTo({ top: 0, behavior: "instant" });
+  saveSession();
 }
 
 /* ── Symptom chips ─────────────────────────────────────────── */
@@ -209,6 +215,8 @@ function renderChips() {
   SYMPTOMS.forEach(s => {
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.dataset.symptom = s.id;
+    btn.setAttribute("aria-pressed", String(state.symptoms.includes(s.id)));
     btn.className = "chip" + (state.symptoms.includes(s.id) ? " selected" : "");
     btn.innerHTML = `<span class="chip-icon">${s.icon}</span>
       <span class="chip-label">${s.label}</span>
@@ -217,6 +225,8 @@ function renderChips() {
       const i = state.symptoms.indexOf(s.id);
       if (i >= 0) state.symptoms.splice(i, 1); else state.symptoms.push(s.id);
       renderChips();
+      wrap.querySelector(`[data-symptom="${s.id}"]`).focus();
+      saveSession();
       $("btn-diagnose").disabled = state.symptoms.length === 0;
     });
     wrap.appendChild(btn);
@@ -236,7 +246,7 @@ function renderDiagnosis() {
       <div class="diag-head">
         <span class="diag-emoji">${d.top.emoji}</span>
         <div>
-          <p class="diag-title">${d.top.name}</p>
+          <h2 class="diag-title">${d.top.name}</h2>
           <p class="diag-sub">${d.top.short}</p>
         </div>
       </div>
@@ -251,7 +261,7 @@ function renderDiagnosis() {
       <div class="tell-apart"><strong><span class="ta-emoji">🔍</span>How to tell for sure:</strong><br>${d.top.tell_apart}</div>`;
 
   if (d.runner) {
-    html += `<div class="runner-up"><strong>⚠️ Could also be: ${d.runner.emoji} ${d.runner.name}.</strong><br>${d.runner.tell_apart}</div>`;
+    html += `<div class="runner-up"><strong>⚠️ Could also be: ${d.runner.emoji} ${d.runner.name}.</strong><br>${d.runner.tell_apart}<button class="btn btn-ghost" id="btn-alternative">Use this alternative after checking</button></div>`;
   }
   if (d.mixed) {
     html += `<div class="mixed-signal"><strong>🫥 Mixed signals:</strong> your symptoms point at both a thirsty and a drowning plant — the 2-second soil check above settles it in ten seconds.</div>`;
@@ -263,30 +273,81 @@ function renderDiagnosis() {
   html += `</div>`;
 
   $("diag-content").innerHTML = html;
+  $("btn-alternative")?.addEventListener("click", () => {
+    const previous = state.diagnosis.top;
+    state.manualDiagnosis = true;
+    state.diagnosis = { ...state.diagnosis, top: state.diagnosis.runner, runner: previous,
+      conf: 0.45, label: "WORTH CHECKING" };
+    state.plan = null; state.planId = null; state.saved = false;
+    renderDiagnosis(); saveSession();
+  });
 }
 
 /* ── Plan screen ───────────────────────────────────────────── */
+const SESSION_KEY = "planttriage.active.v1";
+function storageWarning() {
+  $("storage-status").textContent = "Your progress is available in this tab, but could not be saved on this device. Keep this tab open.";
+}
+function saveSession() {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      version: 1, screen: state.screen, demo: state.demo, symptoms: state.symptoms,
+      issue: state.diagnosis?.top.id || null, manualDiagnosis: state.manualDiagnosis, planId: state.planId,
+      checked: state.plan?.map(d => !!d.done) || null, saved: state.saved,
+      photo: state.photoDataUrl, afterPhoto: state.afterPhotoDataUrl,
+    }));
+    $("storage-status").textContent = "";
+  } catch { storageWarning(); }
+}
 function savePlanState() {
-  if (!state.planId) return;
+  if (!state.planId || !state.plan) return;
   try {
     localStorage.setItem(`planttriage.plan.${state.planId}`, JSON.stringify({
-      issue: state.diagnosis.top.id,
-      checked: state.plan.map(d => d.done),
-      saved: state.saved,
+      issue: state.diagnosis.top.id, checked: state.plan.map(d => !!d.done), saved: state.saved,
     }));
-  } catch (e) { /* private mode — plan just won't persist */ }
+  } catch { storageWarning(); }
+  saveSession();
 }
-
-function loadPlanState() {
-  if (!state.planId) return;
+function restoreSession() {
   try {
-    const raw = localStorage.getItem(`planttriage.plan.${state.planId}`);
-    if (raw) {
-      const data = JSON.parse(raw);
-      state.plan.forEach((d, i) => { d.done = !!(data.checked && data.checked[i]); });
-      state.saved = !!data.saved;
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.version !== 1 || !screens.includes(data.screen) || !Array.isArray(data.symptoms)
+        || data.symptoms.some(id => !SYMPTOMS.some(s => s.id === id))
+        || (data.issue && !Object.hasOwn(ISSUES, data.issue))) throw new Error("Invalid saved session");
+    if (["diagnosis", "plan", "saved"].includes(data.screen) && (!data.issue || !data.symptoms.length)) throw new Error("Missing diagnosis");
+    if (["plan", "saved"].includes(data.screen) && (!data.planId || !Array.isArray(data.checked)
+      || data.checked.length !== 14 || data.checked.some(done => typeof done !== "boolean"))) throw new Error("Missing plan");
+    state.demo = data.demo === true;
+    state.plantName = state.demo ? "Money tree" : "your plant";
+    state.symptoms = data.symptoms;
+    const photo = value => typeof value === "string" && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(value) ? value : null;
+    state.photoDataUrl = photo(data.photo); state.afterPhotoDataUrl = photo(data.afterPhoto);
+    state.saved = data.saved === true;
+    state.manualDiagnosis = data.manualDiagnosis === true;
+    if (data.issue) {
+      state.diagnosis = diagnose(state.symptoms);
+      if (state.diagnosis.top.id !== data.issue) {
+        state.diagnosis = { ...state.diagnosis, runner: state.diagnosis.top,
+          top: { id: data.issue, ...ISSUES[data.issue] }, conf: 0.45, label: "WORTH CHECKING" };
+      }
     }
-  } catch (e) { /* ignore */ }
+    if (state.manualDiagnosis && state.diagnosis) {
+      state.diagnosis.conf = 0.45; state.diagnosis.label = "WORTH CHECKING";
+    }
+    if (data.issue && data.planId && Array.isArray(data.checked) && data.checked.length === 14) {
+      state.planId = data.planId;
+      state.plan = buildPlan(data.issue).map((d, i) => ({ ...d, done: data.checked[i] === true }));
+    }
+    renderPhoto(); renderChips();
+    if (state.diagnosis) renderDiagnosis();
+    if (state.plan) renderPlan();
+    if (data.screen === "saved") renderSaved();
+    showScreen(data.screen);
+  } catch {
+    $("storage-status").textContent = "Your saved session could not be restored. Start a new rescue; existing plan records have been kept.";
+  }
 }
 
 function renderPlan() {
@@ -299,7 +360,7 @@ function renderPlan() {
       <p class="lede">${state.diagnosis.top.name} · one small step a day.</p>
     </div>
     <div class="plan-progress">
-      <div class="pp-num">${done} / ${state.plan.length} days done</div>
+      <div class="pp-num" role="status" aria-label="Plan progress">${done} / ${state.plan.length} days done</div>
       <div class="pp-bar"><div class="pp-fill" style="width:${pct}%"></div></div>
     </div>`;
 
@@ -309,7 +370,7 @@ function renderPlan() {
     const el = document.createElement("div");
     el.className = "day" + (d.done ? " done" : "") + (d.goal ? " goal" : "");
     el.innerHTML = `
-      <button class="day-check" aria-label="Mark day ${d.day} done">✓</button>
+      <button class="day-check" aria-label="Mark day ${d.day} done" aria-pressed="${!!d.done}">✓</button>
       <div>
         <span class="day-daynum">Day ${d.day}</span>
         <p class="day-title">${d.title}</p>
@@ -319,6 +380,7 @@ function renderPlan() {
       d.done = !d.done;
       savePlanState();
       renderPlan();
+      wrap.querySelectorAll(".day-check")[d.day - 1].focus();
     });
     wrap.appendChild(el);
   });
@@ -326,6 +388,8 @@ function renderPlan() {
 
 /* ── Saved screen ──────────────────────────────────────────── */
 function renderSaved() {
+  const done = state.plan.filter(d => d.done).length;
+  const after = state.afterPhotoDataUrl ? `<img class="ba-img" src="${state.afterPhotoDataUrl}" alt="After">` : `<div class="ba-img" aria-label="No recovery photo yet">💚🌿</div>`;
   const before = state.photoDataUrl
     ? `<img class="ba-img" src="${state.photoDataUrl}" alt="Before">`
     : `<div class="ba-img">🪴</div>`;
@@ -333,19 +397,21 @@ function renderSaved() {
     <div class="saved-wrap">
       <span class="sw-emoji">🌱</span>
       <h1>You saved ${state.plantName}.</h1>
-      <p class="sw-sub">${state.diagnosis.top.emoji} ${state.diagnosis.top.name} — beaten by patience and a 14-day plan.</p>
+      <p class="sw-sub">${state.diagnosis.top.emoji} ${state.diagnosis.top.name} · ${done} / 14 days checked. Keep watching for recovery.</p>
       <div class="ba">
         <div class="ba-frame">${before}<div class="ba-cap">BEFORE</div></div>
-        <div class="ba-arrow">→<small>14 days</small></div>
-        <div class="ba-frame"><div class="ba-img">💚🌿</div><div class="ba-cap">AFTER</div></div>
+        <div class="ba-arrow">→<small>Progress</small></div>
+        <div class="ba-frame">${after}<div class="ba-cap">AFTER</div></div>
       </div>
       <div class="saved-mantra">You're the person whose plants survive.<small>Keep the habit: check the soil before you water.</small></div>
     </div>`;
+  $("btn-remove-after").hidden = !state.afterPhotoDataUrl;
   launchConfetti();
 }
 
 function launchConfetti() {
   const box = document.querySelector(".confetti");
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   box.innerHTML = "";
   const emojis = ["🌿", "💚", "✨", "🌱", "💛", "🍃"];
   for (let i = 0; i < 26; i++) {
@@ -360,15 +426,44 @@ function launchConfetti() {
 }
 
 /* ── Photo handling ────────────────────────────────────────── */
-function handlePhoto(file) {
-  if (!file || !file.type.startsWith("image/")) return;
+let photoRequest = 0;
+function renderPhoto() {
+  $("photo-preview").hidden = !state.photoDataUrl;
+  if (state.photoDataUrl) $("photo-preview").src = state.photoDataUrl;
+  else $("photo-preview").removeAttribute("src");
+  $("dropzone-inner").hidden = !!state.photoDataUrl;
+  $("btn-remove-photo").hidden = !state.photoDataUrl;
+}
+function handlePhoto(file, after = false) {
+  if (!file) return;
+  const error = after ? $("after-photo-error") : $("photo-error");
+  error.textContent = "";
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) {
+    error.textContent = "Choose a JPG, PNG, WebP or GIF photo."; return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    error.textContent = "That photo is too large. Choose one under 10 MB."; return;
+  }
+  const request = ++photoRequest;
   const reader = new FileReader();
-  reader.onload = e => {
-    state.photoDataUrl = e.target.result;
-    $("photo-preview").src = state.photoDataUrl;
-    $("photo-preview").hidden = false;
-    $("dropzone-inner").hidden = true;
-    $("btn-remove-photo").hidden = false;
+  reader.onerror = () => { error.textContent = "The photo could not be read. Try another file."; };
+  reader.onload = () => {
+    const image = new Image();
+    image.onerror = () => { if (request === photoRequest) error.textContent = "This image could not be opened. Try another photo."; };
+    image.onload = () => {
+      if (request !== photoRequest) return;
+      try {
+        const scale = Math.min(1, 1000 / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        state[after ? "afterPhotoDataUrl" : "photoDataUrl"] = canvas.toDataURL("image/jpeg", 0.8);
+        if (after) renderSaved(); else renderPhoto();
+        saveSession();
+      } catch { error.textContent = "This image could not be opened. Try another photo."; }
+    };
+    image.src = reader.result;
   };
   reader.readAsDataURL(file);
 }
@@ -376,8 +471,11 @@ function handlePhoto(file) {
 /* ── Demo: MY money tree is DYING ──────────────────────────── */
 function startDemo() {
   state.demo = true;
+  state.manualDiagnosis = false;
   state.plantName = "Money tree";
-  state.photoDataUrl = null;               // honest: no fake photo, use the tree card
+  state.photoDataUrl = null;
+  state.afterPhotoDataUrl = null;
+  renderPhoto();               // honest: no fake photo, use the tree card
   state.symptoms = ["yellowing", "drooping", "wilting"]; // classic overwatered money tree
   state.diagnosis = diagnose(state.symptoms);
   state.planId = "demo-" + Date.now();
@@ -389,16 +487,14 @@ function startDemo() {
 }
 
 function newDiagnosis() {
-  state.photoDataUrl = null;
-  $("photo-preview").hidden = true;
-  $("dropzone-inner").hidden = false;
-  $("btn-remove-photo").hidden = true;
-  $("photo-input").value = "";
-  state.symptoms = [];
-  state.demo = false;
-  state.plantName = "your plant";
-  renderChips();
-  showScreen("home");
+  photoRequest++;
+  state.photoDataUrl = null; state.afterPhotoDataUrl = null;
+  state.symptoms = []; state.demo = false; state.plantName = "your plant";
+  state.manualDiagnosis = false;
+  state.diagnosis = null; state.plan = null; state.planId = null; state.saved = false;
+  $("photo-input").value = ""; $("after-photo-input").value = "";
+  $("photo-error").textContent = ""; $("after-photo-error").textContent = "";
+  renderPhoto(); renderChips(); showScreen("home");
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -406,6 +502,7 @@ function newDiagnosis() {
    ══════════════════════════════════════════════════════════════ */
 document.addEventListener("DOMContentLoaded", () => {
   renderChips();
+  restoreSession();
 
   // Home
   $("btn-start").addEventListener("click", () => showScreen("photo"));
@@ -421,12 +518,14 @@ document.addEventListener("DOMContentLoaded", () => {
     handlePhoto(e.dataTransfer.files[0]);
   });
   $("btn-remove-photo").addEventListener("click", e => {
+    photoRequest++;
     e.stopPropagation();
     state.photoDataUrl = null;
     $("photo-preview").hidden = true;
     $("dropzone-inner").hidden = false;
     $("btn-remove-photo").hidden = true;
     $("photo-input").value = "";
+    renderPhoto(); saveSession();
   });
   $("btn-photo-next").addEventListener("click", () => showScreen("symptoms"));
   $("btn-photo-skip").addEventListener("click", () => showScreen("symptoms"));
@@ -435,17 +534,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-symptoms-back").addEventListener("click", () => showScreen("photo"));
   $("btn-diagnose").addEventListener("click", () => {
     state.diagnosis = diagnose(state.symptoms);
+    state.manualDiagnosis = false;
+    state.plan = null; state.planId = null; state.saved = false;
     renderDiagnosis();
     showScreen("diagnosis");
   });
 
   // Diagnosis
-  $("btn-diagnosis-back").addEventListener("click", () => showScreen("symptoms"));
+  $("btn-diagnosis-back").addEventListener("click", () => { renderChips(); showScreen("symptoms"); });
   $("btn-plan").addEventListener("click", () => {
     state.planId = (state.demo ? "demo-" : "diag-") + Date.now();
     state.plan = buildPlan(state.diagnosis.top.id).map(d => ({ ...d, done: false }));
     state.saved = false;
-    loadPlanState();
+    savePlanState();
     renderPlan();
     showScreen("plan");
   });
@@ -453,7 +554,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Plan
   $("btn-saved").addEventListener("click", () => {
     state.saved = true;
-    state.plan.forEach(d => { d.done = true; });
+
     savePlanState();
     renderSaved();
     showScreen("saved");
@@ -461,5 +562,11 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btn-plan-restart").addEventListener("click", newDiagnosis);
 
   // Saved
+  $("after-photo-input").addEventListener("change", e => handlePhoto(e.target.files[0], true));
+  $("btn-remove-after").addEventListener("click", () => {
+    photoRequest++; state.afterPhotoDataUrl = null; $("after-photo-input").value = "";
+    renderSaved(); saveSession();
+  });
+  $("btn-saved-back").addEventListener("click", () => { renderPlan(); showScreen("plan"); });
   $("btn-again").addEventListener("click", newDiagnosis);
 });

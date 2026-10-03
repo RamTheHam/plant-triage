@@ -32,6 +32,7 @@
 </nav>
 
 <main id="app">
+<p id="storage-status" role="status" aria-live="polite"></p>
 
   <!-- ══════════ SCREEN 1 · HOME ══════════ -->
   <section class="screen active" id="screen-home" data-step="1">
@@ -56,7 +57,7 @@
     <p class="lede">A photo helps you track the rescue. It's used only on your phone — for your own before/after.</p>
 
     <div class="dropzone" id="dropzone">
-      <input type="file" id="photo-input" accept="image/*" capture="environment">
+      <input type="file" id="photo-input" aria-label="Choose a plant photo" accept="image/jpeg,image/png,image/webp,image/gif" capture="environment">
       <div class="dropzone-inner" id="dropzone-inner">
         <span class="dz-icon">📸</span>
         <strong>Take a photo</strong>
@@ -66,6 +67,7 @@
       <button class="btn btn-ghost btn-sm" id="btn-remove-photo" hidden>✕ Remove photo</button>
     </div>
 
+    <p id="photo-error" role="alert"></p>
     <div class="btn-stack">
       <button class="btn btn-primary btn-big" id="btn-photo-next">Next — pick symptoms →</button>
       <button class="btn btn-ghost" id="btn-photo-skip">Skip photo for now</button>
@@ -106,6 +108,11 @@
   <section class="screen" id="screen-saved" data-step="6">
     <div class="confetti" aria-hidden="true"></div>
     <div id="saved-content"></div>
+    <label class="after-label" for="after-photo-input">Add a recovery photo</label>
+    <input type="file" id="after-photo-input" accept="image/jpeg,image/png,image/webp,image/gif" capture="environment">
+    <p id="after-photo-error" role="alert"></p>
+    <button class="btn btn-ghost" id="btn-remove-after" hidden>Remove recovery photo</button>
+    <button class="btn btn-ghost" id="btn-saved-back">Back to my plan</button>
     <div class="btn-stack">
       <button class="btn btn-primary btn-big" id="btn-again">🌿 Diagnose another plant</button>
     </div>

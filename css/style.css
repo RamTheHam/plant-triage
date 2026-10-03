@@ -449,3 +449,16 @@ h2 { font-size: 24px; line-height: 1.2; margin: 18px 0 4px; }
   .hero-plant { font-size: 62px; }
   .brand-sub { display: none; }
 }
+
+/* Native hidden state must win over component display rules. */
+[hidden] { display: none !important; }
+#btn-remove-photo { position: relative; z-index: 1; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--green-dark); outline-offset: 4px; }
+.day-check { width: 44px; height: 44px; }
+.after-label { display: block; margin: 18px 0 8px; font-weight: 700; }
+#after-photo-input { max-width: 100%; padding: 8px 0; }
+#storage-status, [role="alert"] { color: #7a3520; font-size: 14px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html { scroll-behavior: auto; }
+}
