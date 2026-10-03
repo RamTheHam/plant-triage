@@ -59,3 +59,40 @@ js/app.js       rules engine, plan generator, demo, localStorage persistence
 
 Vanilla HTML/CSS/JS. Zero dependencies, zero network calls, zero API keys,
 works offline. Private by construction.
+
+## Recovery progress and photos
+
+The current rescue (including unfinished photo/symptom selection, checked days,
+and before/after photos) resumes on reload. Photos are validated and resized
+locally; nothing leaves the device. On the recovery screen, **Add a recovery
+photo** creates a real before/after comparison; **Back to my plan** resumes the
+checklist. Reporting improvement does not mark uncompleted days done.
+
+A close alternative diagnosis can be selected after checking the distinguishing
+signs. Its confidence remains **WORTH CHECKING**. Starting a new rescue clears
+only the active UI session; existing per-plan storage records and unrelated
+storage are retained. Earlier versions did not store enough information to
+resume old plans; those records are preserved but cannot be reconstructed with
+photos/symptoms. If storage is unavailable, a visible message explains that
+progress remains available only in the current tab.
+
+## End-to-end tests
+
+Node >=22.12 and Python 3 are required. The pinned `e2e` runner from
+[tester-army/e2e](https://github.com/tester-army/e2e) uses its official
+`@e2e-dev/web` browser engine. Playwright is the engine's required peer,
+not a separate test runner. These exact interaction tests need no model/key:
+
+```bash
+npm ci
+npx playwright install chromium --with-deps
+npm run test:e2e
+npm run test:e2e:desktop
+npm run test:e2e:mobile
+```
+
+The config starts and stops a local static server on free ports. Every test
+gets isolated browser storage and uses synthetic images. No production data,
+accounts, paid services or personal records are used. CI runs desktop and
+390px mobile Chromium on pull requests and pushes to main and uploads reports.
+See [the flow matrix](docs/e2e-audit.md).
